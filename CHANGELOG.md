@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-04
 
 - Initial release of the crate. The crate contains struct definitions needed for parsing and
   serialization of DASH MPD manifests, which use a dedicated XML schema. The definitions have been
