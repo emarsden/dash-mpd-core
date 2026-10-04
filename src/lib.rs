@@ -39,6 +39,7 @@ use serde_with::skip_serializing_none;
 use regex::Regex;
 use chrono::DateTime;
 use url::Url;
+#[cfg(feature = "log")]
 #[allow(unused_imports)]
 use tracing::warn;
 
