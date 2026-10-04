@@ -11,7 +11,7 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: msys2/setup-msys2@v2.32.0
+    - uses: msys2/setup-msys2@v2.33.0
       with:
         path-type: inherit
         update: true
