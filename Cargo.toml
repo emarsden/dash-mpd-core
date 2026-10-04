@@ -21,10 +21,10 @@ num-traits = "0.2.19"
 iso8601 = "0.6.5"
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
 thiserror = "2.0.20"
-tracing = { version = "0.1.44", features = ["attributes", "std"], optional = true }
-serde_ignored = { version = "0.1.14", optional = true }
 url = "2.5.8"
 serde_with = { version = "3.23.0" }
+serde_ignored = { version = "0.1.14", optional = true }
+tracing = { version = "0.1.44", features = ["attributes", "std"], optional = true }
 
 
 [dev-dependencies]
