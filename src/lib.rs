@@ -413,6 +413,25 @@ where
     Ok(out)
 }
 
+// Some attributes are not always in the expected form in practice (for example TIDAL uses
+// AdaptationSet group="main" where an integer is required). Rather than rejecting the entire
+// manifest, ignore a value that does not parse as T.
+fn deserialize_lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: de::Deserializer<'de>,
+    T: std::str::FromStr,
+{
+    let s = String::deserialize(deserializer)?;
+    match s.trim().parse::<T>() {
+        Ok(val) => Ok(Some(val)),
+        Err(_) => {
+            #[cfg(feature = "log")]
+            warn!("Ignoring value {s:?} which is not a valid {}", std::any::type_name::<T>());
+            Ok(None)
+        },
+    }
+}
+
 // These serialization functions are need to serialize correct default values for various optional
 // namespaces specified as attributes of the root MPD struct (e.g. xmlns:xsi, xmlns:xlink). If a
 // value is present in the struct field (specified in the parsed XML or provided explicitly when
@@ -1581,7 +1600,8 @@ pub struct AdaptationSet {
     pub href: Option<String>,
     #[serde(rename = "@xlink:actuate", alias = "@actuate", default = "default_optstring_on_request")]
     pub actuate: Option<String>,
-    #[serde(rename = "@group")]
+    /// Non-integer values, which are not conformant, are ignored when parsing.
+    #[serde(rename = "@group", deserialize_with = "deserialize_lenient", default)]
     pub group: Option<i64>,
     #[serde(rename = "@selectionPriority")]
     pub selectionPriority: Option<u64>,

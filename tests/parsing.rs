@@ -563,6 +563,26 @@ fn test_parsing_xsd_uintvector() {
 }
 
 
+#[test]
+fn test_parsing_adaptation_group() {
+    setup_logging();
+    let xml = r#"<MPD><Period><AdaptationSet group="3"></AdaptationSet></Period></MPD>"#;
+    let mpd = parse(xml).unwrap();
+    assert_eq!(mpd.periods[0].adaptations[0].group, Some(3));
+
+    let xml = r#"<MPD><Period><AdaptationSet></AdaptationSet></Period></MPD>"#;
+    let mpd = parse(xml).unwrap();
+    assert_eq!(mpd.periods[0].adaptations[0].group, None);
+
+    // Non-conformant value used by TIDAL
+    let xml = r#"<MPD><Period><AdaptationSet group="main" mimeType="audio/mp4"></AdaptationSet></Period></MPD>"#;
+    let mpd = parse(xml).unwrap();
+    let adaptation = &mpd.periods[0].adaptations[0];
+    assert_eq!(adaptation.group, None);
+    assert_eq!(adaptation.mimeType.as_deref(), Some("audio/mp4"));
+}
+
+
 #[tokio::test]
 async fn test_content_protection() {
     setup_logging();
