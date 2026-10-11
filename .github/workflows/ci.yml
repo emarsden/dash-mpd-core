@@ -13,6 +13,7 @@ jobs:
            fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@cargo-hack
+      - name: Check feature-powerset
         run: |
           sudo apt-get update
           sudo apt-get -y install libxml2-utils
