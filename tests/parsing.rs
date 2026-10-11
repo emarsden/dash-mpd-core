@@ -1054,3 +1054,37 @@ async fn test_parsing_namespacing() {
                     |sl| sl.segment_urls.len() == 1)))));
 }
 
+
+#[tokio::test]
+async fn test_parsing_ull() {
+    setup_logging();
+    let url = "https://cmafref.akamaized.net/cmaf/live-ull/2006350/akambr/out.mpd";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::new(30, 0))
+        .gzip(true)
+        .build()
+        .expect("creating HTTP client");
+    let xml = client.get(url)
+        .header("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
+        .send().await
+        .expect("requesting MPD content")
+        .text().await
+        .expect("fetching MPD content");
+    let mpd = parse(&xml);
+    let mpd = mpd.unwrap();
+    assert_eq!(mpd.periods.len(), 1);
+    assert_eq!(mpd.ServiceDescription.len(), 1);
+    assert_eq!(mpd.ServiceDescription[0].Latency.len(), 1);
+    assert!(mpd.periods.iter().all(
+        |p| p.adaptations.iter().all(
+            |a| a.Resync.len() == 1 &&
+                a.Resync[0].dT.is_some() &&
+                a.representations.iter().all(
+                    |r| r.ProducerReferenceTime.len() == 1 &&
+                        r.ProducerReferenceTime[0].inband.is_some_and(|ib| ib) &&
+                        r.ProducerReferenceTime[0].prtType.as_ref().is_some_and(|typ| typ.eq("captured")) &&
+                        r.Resync.len() == 1 &&
+                        a.Resync[0].dT.is_some()))));
+}
+
+
