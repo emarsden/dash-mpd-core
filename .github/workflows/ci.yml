@@ -32,6 +32,8 @@ jobs:
 
       - name: Run tests
         run: |
+          sudo apt-get update
+          sudo apt-get -y install libxml2-utils
           RUST_LOG=info cargo test --jobs 1 -- --show-output --test-threads=1
           cargo run --example serialize
           cargo run --example pprint_bbc_adaptive
