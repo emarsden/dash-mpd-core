@@ -893,6 +893,8 @@ pub struct SegmentList {
     pub Initialization: Option<Initialization>,
     pub SegmentTimeline: Option<SegmentTimeline>,
     pub BitstreamSwitching: Option<BitstreamSwitching>,
+    #[serde(rename = "@presentationTimeOffset")]
+    pub presentationTimeOffset: Option<u64>,
     #[serde(rename = "SegmentURL")]
     pub segment_urls: Vec<SegmentURL>,
 }

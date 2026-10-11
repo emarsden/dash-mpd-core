@@ -104,6 +104,26 @@ fn test_serialize_f64_infnan() {
 }
 
 
+#[test]
+fn test_presentation_time_offset_roundtrip() {
+    let xml = r#"<MPD><Period><AdaptationSet><Representation>
+        <SegmentList timescale="1000" presentationTimeOffset="5000000000">
+            <SegmentURL media="segment.m4s"/>
+        </SegmentList>
+    </Representation></AdaptationSet></Period></MPD>"#;
+    let mpd = parse(xml).unwrap();
+    let rep = &mpd.periods[0].adaptations[0].representations[0];
+    let sl = rep.SegmentList.as_ref().unwrap();
+    assert_eq!(sl.presentationTimeOffset, Some(5_000_000_000));
+
+    let serialized = mpd.to_string();
+    assert!(serialized.contains("presentationTimeOffset=\"5000000000\""));
+    let roundtripped = parse(&serialized).unwrap();
+    let rep = &roundtripped.periods[0].adaptations[0].representations[0];
+    let sl = rep.SegmentList.as_ref().unwrap();
+    assert_eq!(sl.presentationTimeOffset, Some(5_000_000_000));
+}
+
 
 #[test]
 fn test_serialize_xsd_uintvector() {
