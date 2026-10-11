@@ -1088,3 +1088,26 @@ async fn test_parsing_ull() {
 }
 
 
+#[tokio::test]
+async fn test_parsing_thumbnails() {
+    setup_logging();
+    let url = "http://dash.edgesuite.net/digitalprimates/sony/SNE_DASH_1/SNE_DASH_1_ss.mpd";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::new(30, 0))
+        .gzip(true)
+        .build()
+        .expect("creating HTTP client");
+    let xml = client.get(url)
+        .header("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
+        .send().await
+        .expect("requesting MPD content")
+        .text().await
+        .expect("fetching MPD content");
+    let mpd = parse(&xml);
+    let mpd = mpd.unwrap();
+    assert_eq!(mpd.periods.len(), 1);
+    let period = &mpd.periods[0];
+    let adap = &period.adaptations[0];
+    assert!(adap.codecs.as_ref().is_some_and(|c| c.eq("jpeg")));
+}
+
