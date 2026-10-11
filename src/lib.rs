@@ -482,6 +482,15 @@ where S: serde::Serializer {
     }
 }
 
+#[allow(clippy::ref_option)]
+fn serialize_dashif_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where S: serde::Serializer {
+    if let Some(s) = os {
+        serializer.serialize_str(s)
+    } else {
+        serializer.serialize_str("https://dashif.org/guidelines/clearKey")
+    }
+}
 
 // These default_* functions are needed to provide defaults for serde deserialization of certain
 // elements, where the Default function for that type doesn't return a value compatible with the
