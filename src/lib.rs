@@ -2149,6 +2149,9 @@ pub struct MPD {
     #[serialize_always]
     #[serde(rename="@xmlns:dvb", alias="@dvb", serialize_with="serialize_dvb_ns")]
     pub dvb: Option<String>,
+    #[serialize_always]
+    #[serde(rename="@xmlns:dashif", alias="@dashif", serialize_with="serialize_dashif_ns")]
+    pub dashif: Option<String>,
     #[serde(rename = "@xsi:schemaLocation", alias = "@schemaLocation")]
     pub schemaLocation: Option<String>,
     // scte214 namespace
