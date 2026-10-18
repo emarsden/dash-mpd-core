@@ -468,6 +468,8 @@ fn test_file_parsing() {
     let xml = fs::read_to_string(path).unwrap();
     let mpd = parse(&xml).unwrap();
     let sl = &mpd.periods[0].adaptations[0].representations[0].SegmentList.as_ref().unwrap();
+    assert_eq!(sl.timescale, Some(1000));
+    assert_eq!(sl.presentationTimeOffset, Some(0));
     assert!(sl.Initialization.as_ref().is_some_and(
         |i| i.sourceURL.as_ref().is_some_and(
             |su| su.contains("foobar"))));

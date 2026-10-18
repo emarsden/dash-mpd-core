@@ -877,6 +877,8 @@ pub struct SegmentList {
     pub duration: Option<u64>,
     #[serde(rename = "@timescale")]
     pub timescale: Option<u64>,
+    #[serde(rename = "@presentationTimeOffset")]
+    pub presentationTimeOffset: Option<u64>,
     #[serde(rename = "@indexRange")]
     pub indexRange: Option<String>,
     #[serde(rename = "@indexRangeExact")]

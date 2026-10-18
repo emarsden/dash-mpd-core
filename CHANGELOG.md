@@ -1,6 +1,12 @@
 # Changelog
 
 
+## [Unreleased]
+
+- `SegmentList` parses and serializes `@presentationTimeOffset`, which the DASH schema gives it
+  through `SegmentBaseType`.
+
+
 ## [0.1.0] - 2026-10-04
 
 - Initial release of the crate. The crate contains struct definitions needed for parsing and
