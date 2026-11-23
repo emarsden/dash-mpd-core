@@ -9,7 +9,8 @@ license = "MIT"
 keywords = ["MPD", "DASH", "MPEG"]
 categories = ["multimedia::video", "parser-implementations"]
 publish = true
-edition = "2021"
+edition = "2024"
+rust-version = "1.88.0"
 
 
 [dependencies]
