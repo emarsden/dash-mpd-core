@@ -98,19 +98,18 @@ fn serialize_xsd_double<S>(xsd: &f64, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let formatted = if xsd.is_nan() {
-        String::from("NaN")
+    if xsd.is_nan() {
+        serializer.serialize_str("NaN")
     } else if xsd.is_infinite() {
-        if xsd.is_sign_positive() {
+        serializer.serialize_str(if xsd.is_sign_positive() {
             // Here serde returns "inf", which doesn't match the XML Schema definition.
-            String::from("INF")
+            "INF"
         } else {
-            String::from("-INF")
-        }
+            "-INF"
+        })
     } else {
-        xsd.to_string()
-    };
-    serializer.serialize_str(&formatted)
+        serializer.collect_str(xsd)
+    }
 }
 
 // Serialize an Option<f64> as an xsd:double.
@@ -126,100 +125,6 @@ where
         serializer.serialize_none()
     }
 }
-
-
-/// Parse an XML duration string, as per <https://www.w3.org/TR/xmlschema-2/#duration>
-///
-/// The lexical representation for duration is the ISO 8601 extended format PnYn MnDTnH nMnS, where
-/// nY represents the number of years, nM the number of months, nD the number of days, 'T' is the
-/// date/time separator, nH the number of hours, nM the number of minutes and nS the number of
-/// seconds. The number of seconds can include decimal digits to arbitrary precision.
-///
-/// Examples: "PT0H0M30.030S", "PT1.2S", PT1004199059S, PT130S
-/// P2Y6M5DT12H35M30S  => 2 years, 6 months, 5 days, 12 hours, 35 minutes, 30 seconds
-/// P1DT2H => 1 day, 2 hours
-/// P0Y20M0D => 20 months (0 is permitted as a number, but is not required)
-/// PT1M30.5S => 1 minute, 30.5 seconds
-///
-/// Limitations:
-///   - this function can't represent negative durations (leading "-" character) due to the choice of a
-///     std::time::Duration.
-///
-///   - this function only accepts fractional parts of seconds, and rejects for example "P0.5Y" and "PT2.3H"
-///
-///   - months are approximated as 30 days and years as 365 days, as std::time::Duration cannot
-///     represent calendar-relative durations. This means that values involving months or years are
-///     not perfectly round-trippable.
-fn parse_xs_duration(s: &str) -> Result<Duration, DashMpdError> {
-    use std::cmp::min;
-
-    match XS_DURATION_REGEX.captures(s) {
-        Some(m) => {
-            if m.name("hastime").is_none() &&
-               m.name("years").is_none() &&
-               m.name("months").is_none() &&
-               m.name("weeks").is_none() &&
-               m.name("days").is_none() {
-                  return Err(DashMpdError::InvalidDuration("empty".to_string()));
-            }
-            let mut secs: u64 = 0;
-            let mut nsecs: u32 = 0;
-            if let Some(nano) = m.name("nanoseconds") {
-                // We drop the initial "." and limit precision in the fractional seconds to 9 digits
-                // (nanosecond precision)
-                let lim = min(nano.as_str().len(), 9 + ".".len());
-                if let Some(ss) = &nano.as_str().get(1..lim) {
-                    let padded = format!("{ss:0<9}");
-                    nsecs = padded.parse::<u32>()
-                        .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                }
-            }
-            if let Some(mseconds) = m.name("seconds") {
-                let seconds = mseconds.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += seconds;
-            }
-            if let Some(mminutes) = m.name("minutes") {
-                let minutes = mminutes.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += minutes * 60;
-            }
-            if let Some(mhours) = m.name("hours") {
-                let hours = mhours.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += hours * 60 * 60;
-            }
-            if let Some(mdays) = m.name("days") {
-                let days = mdays.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += days * 60 * 60 * 24;
-            }
-            if let Some(mweeks) = m.name("weeks") {
-                let weeks = mweeks.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += weeks * 60 * 60 * 24 * 7;
-            }
-            if let Some(mmonths) = m.name("months") {
-                let months = mmonths.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += months * 60 * 60 * 24 * 30;
-            }
-            if let Some(myears) = m.name("years") {
-                let years = myears.as_str().parse::<u64>()
-                    .map_err(|_| DashMpdError::InvalidDuration(String::from(s)))?;
-                secs += years * 60 * 60 * 24 * 365;
-            }
-            if let Some(msign) = m.name("sign") {
-                if msign.as_str() == "-" {
-                    return Err(DashMpdError::InvalidDuration("can't represent negative durations".to_string()));
-                }
-            }
-            Ok(Duration::new(secs, nsecs))
-        },
-        None => Err(DashMpdError::InvalidDuration(String::from("couldn't parse XS duration"))),
-    }
-}
-
 
 // Note bug in current version of the iso8601 crate which incorrectly parses
 // strings like "PT344S" (seen in a real MPD) as a zero duration. However, ISO 8601 standard as
@@ -264,25 +169,114 @@ fn parse_xs_duration(s: &str) -> Result<Duration, DashMpdError> {
 //     }
 // }
 
+/// Parse an XML duration string, as per <https://www.w3.org/TR/xmlschema-2/#duration>
+///
+/// The lexical representation for duration is the ISO 8601 extended format PnYn MnDTnH nMnS, where
+/// nY represents the number of years, nM the number of months, nD the number of days, 'T' is the
+/// date/time separator, nH the number of hours, nM the number of minutes and nS the number of
+/// seconds. The number of seconds can include decimal digits to arbitrary precision.
+///
+/// Examples: "PT0H0M30.030S", "PT1.2S", PT1004199059S, PT130S
+/// P2Y6M5DT12H35M30S  => 2 years, 6 months, 5 days, 12 hours, 35 minutes, 30 seconds
+/// P1DT2H => 1 day, 2 hours
+/// P0Y20M0D => 20 months (0 is permitted as a number, but is not required)
+/// PT1M30.5S => 1 minute, 30.5 seconds
+///
+/// Limitations:
+///   - this function can't represent negative durations (leading "-" character) due to the choice of a
+///     std::time::Duration.
+///
+///   - this function only accepts fractional parts of seconds, and rejects for example "P0.5Y" and "PT2.3H"
+///
+///   - months are approximated as 30 days and years as 365 days, as std::time::Duration cannot
+///     represent calendar-relative durations. This means that values involving months or years are
+///     not perfectly round-trippable.
+fn parse_xs_duration(s: &str) -> Result<Duration, DashMpdError> {
+    use std::cmp::min;
+
+    let invalid = || DashMpdError::InvalidDuration(s.to_string());
+
+    let Some(m) = XS_DURATION_REGEX.captures(s) else {
+        return Err(DashMpdError::InvalidDuration(String::from("couldn't parse XS duration")));
+    };
+
+    if ["hastime", "years", "months", "weeks", "days"]
+        .iter()
+        .all(|name: &&str| m.name(name).is_none())
+    {
+        return Err(DashMpdError::InvalidDuration("empty".to_string()));
+    }
+    if m.name("sign").is_some_and(|sign| sign.as_str() == "-") {
+        return Err(DashMpdError::InvalidDuration(
+            "can't represent negative durations".to_string(),
+        ));
+    }
+
+    let field = |name: &str, multiplier: u64| -> Result<u64, DashMpdError> {
+        m.name(name).map_or(Ok(0), |value| {
+            value
+                .as_str()
+                .parse::<u64>()
+                .map_err(|_| invalid())?
+                .checked_mul(multiplier)
+                .ok_or_else(&invalid)
+        })
+    };
+
+    let secs = [
+        field("seconds", 1)?,
+        field("minutes", 60)?,
+        field("hours", 60 * 60)?,
+        field("days", 60 * 60 * 24)?,
+        field("weeks", 60 * 60 * 24 * 7)?,
+        field("months", 60 * 60 * 24 * 30)?,
+        field("years", 60 * 60 * 24 * 365)?,
+    ]
+    .into_iter()
+    .try_fold(0u64, u64::checked_add)
+    .ok_or_else(&invalid)?;
+
+    let nsecs = match m.name("nanoseconds") {
+        Some(nano) => {
+            // We drop the initial "." and limit precision in the fractional seconds to 9 digits
+            // (nanosecond precision)
+            let lim = min(nano.as_str().len(), 9 + ".".len());
+            match nano.as_str().get(1..lim) {
+                Some(ss) => {
+                    let padded = format!("{ss:0<9}");
+                    padded.parse::<u32>().map_err(|_| invalid())?
+                }
+                None => 0,
+            }
+        }
+        None => 0,
+    };
+
+    Ok(Duration::new(secs, nsecs))
+}
 
 
-// Deserialize an optional XML duration string to an Option<Duration>. This is a little trickier
-// than deserializing a required field with serde.
-fn deserialize_xs_duration<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+// Deserialize an optional xs:duration or xs:dateTime value.
+fn deserialize_optional_xs<'de, D, T>(
+    deserializer: D,
+    parse: fn(&str) -> Result<T, DashMpdError>,
+) -> Result<Option<T>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     match <Option<String>>::deserialize(deserializer) {
-        Ok(optstring) => match optstring {
-            Some(xs) => match parse_xs_duration(&xs) {
-                Ok(d) => Ok(Some(d)),
-                Err(e) => Err(de::Error::custom(e)),
-            },
-            None => Ok(None),
-        },
+        Ok(Some(xs)) => parse(&xs).map(Some).map_err(de::Error::custom),
         // the field isn't present, return an Ok(None)
-        Err(_) => Ok(None),
+        _ => Ok(None),
     }
+}
+
+// Deserialize an optional XML duration string to an Option<Duration>.
+fn deserialize_xs_duration<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserialize_optional_xs(deserializer, parse_xs_duration)
 }
 
 // There are many possible correct ways of serializing a Duration in xs:duration (ISO 8601) format.
@@ -297,30 +291,30 @@ fn serialize_xs_duration<S>(oxs: &Option<Duration>, serializer: S) -> Result<S::
 where
     S: Serializer,
 {
-    if let Some(xs) = oxs {
-        let total_secs = xs.as_secs();
-        let nanos = xs.subsec_nanos();
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        let secs = total_secs % 60;
-        let frac = if nanos > 0 {
-            format!(".{nanos:09}").trim_end_matches('0').to_string()
-        } else {
-            String::new()
-        };
-        let s = match (hours, mins, secs, nanos) {
-            (h, 0, 0, 0) if h > 0 => format!("PT{h}H"),
-            (h, m, 0, 0) if h > 0 => format!("PT{h}H{m}M"),
-            (0, m, 0, 0) if m > 0 => format!("PT{m}M"),
-            (h, m, s, _) if h > 0 => format!("PT{h}H{m}M{s}{frac}S"),
-            (0, m, s, _) if m > 0 => format!("PT{m}M{s}{frac}S"),
-            _ => format!("PT{secs}{frac}S"),
-        };
-        serializer.serialize_str(&s)
-    } else {
+    let Some(xs) = oxs else {
         // in fact this won't be called because of the #[skip_serializing_none] annotation
-        serializer.serialize_none()
-    }
+        return serializer.serialize_none();
+    };
+
+    let total_secs = xs.as_secs();
+    let nanos = xs.subsec_nanos();
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    let frac = if nanos > 0 {
+        format!(".{nanos:09}").trim_end_matches('0').to_string()
+    } else {
+        String::new()
+    };
+    let s = match (hours, mins, secs, nanos) {
+        (h, 0, 0, 0) if h > 0 => format!("PT{h}H"),
+        (h, m, 0, 0) if h > 0 => format!("PT{h}H{m}M"),
+        (0, m, 0, 0) if m > 0 => format!("PT{m}M"),
+        (h, m, s, _) if h > 0 => format!("PT{h}H{m}M{s}{frac}S"),
+        (0, m, s, _) if m > 0 => format!("PT{m}M{s}{frac}S"),
+        _ => format!("PT{secs}{frac}S"),
+    };
+    serializer.serialize_str(&s)
 }
 
 
@@ -333,29 +327,30 @@ fn parse_xs_datetime(s: &str) -> Result<XsDatetime, DashMpdError> {
     use iso8601::Date;
     use chrono::{LocalResult, NaiveDate, TimeZone};
     use num_traits::cast::FromPrimitive;
-    match DateTime::<chrono::offset::FixedOffset>::parse_from_rfc3339(s) {
+
+    match chrono::DateTime::<chrono::offset::FixedOffset>::parse_from_rfc3339(s) {
         Ok(dt) => Ok(dt.into()),
         Err(_) => match iso8601::datetime(s) {
             Ok(dt) => {
                 let nd = match dt.date {
                     Date::YMD { year, month, day } =>
                         NaiveDate::from_ymd_opt(year, month, day)
-                        .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?,
+                        .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?,
                     Date::Week { year, ww, d } => {
                         let d = chrono::Weekday::from_u32(d)
-                            .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?;
+                            .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?;
                         NaiveDate::from_isoywd_opt(year, ww, d)
-                            .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?
+                            .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?
                     },
                     Date::Ordinal { year, ddd } =>
                         NaiveDate::from_yo_opt(year, ddd)
-                        .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?,
+                        .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?,
                 };
-                let nd = nd.and_hms_nano_opt(dt.time.hour, dt.time.minute, dt.time.second, dt.time.millisecond*1000*1000)
-                    .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?;
+                let nd = nd.and_hms_nano_opt(dt.time.hour, dt.time.minute, dt.time.second, dt.time.millisecond * 1000 * 1000)
+                    .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?;
                 let tz_secs = dt.time.tz_offset_hours * 3600 + dt.time.tz_offset_minutes * 60;
                 match chrono::FixedOffset::east_opt(tz_secs)
-                    .ok_or(DashMpdError::InvalidDateTime(s.to_string()))?
+                    .ok_or_else(|| DashMpdError::InvalidDateTime(s.to_string()))?
                     .from_local_datetime(&nd)
                 {
                     LocalResult::Single(local) => Ok(local.with_timezone(&chrono::Utc)),
@@ -363,7 +358,7 @@ fn parse_xs_datetime(s: &str) -> Result<XsDatetime, DashMpdError> {
                 }
             },
             Err(_) => Err(DashMpdError::InvalidDateTime(s.to_string())),
-        }
+        },
     }
 }
 
@@ -372,17 +367,7 @@ fn deserialize_xs_datetime<'de, D>(deserializer: D) -> Result<Option<XsDatetime>
 where
     D: de::Deserializer<'de>,
 {
-    match <Option<String>>::deserialize(deserializer) {
-        Ok(optstring) => match optstring {
-            Some(xs) => match parse_xs_datetime(&xs) {
-                Ok(d) => Ok(Some(d)),
-                Err(e) => Err(de::Error::custom(e)),
-            },
-            None => Ok(None),
-        },
-        // the field isn't present; return an Ok(None)
-        Err(_) => Ok(None),
-    }
+    deserialize_optional_xs(deserializer, parse_xs_datetime)
 }
 
 // XSD type is "UIntVectorType", or whitespace-separated list of unsigned integers.
@@ -403,14 +388,9 @@ where
     D: de::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    let mut out = Vec::<u64>::new();
-    for uint64_str in s.split_whitespace() {
-        match uint64_str.parse::<u64>() {
-            Ok(val) => out.push(val),
-            Err(e) => return Err(de::Error::custom(e)),
-        }
-    }
-    Ok(out)
+    s.split_whitespace()
+        .map(|u| u.parse::<u64>().map_err(de::Error::custom))
+        .collect()
 }
 
 // These serialization functions are need to serialize correct default values for various optional
@@ -422,75 +402,25 @@ where
 // The quick-xml support for #[serde(default = "fn")] (which would allow a less heavyweight solution
 // to this) does not seem to work.
 
-#[allow(clippy::ref_option)]
-fn serialize_xmlns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("urn:mpeg:dash:schema:mpd:2011")
-    }
+macro_rules! serialize_ns_with_default {
+    ($name:ident, $default:expr) => {
+        #[allow(clippy::ref_option)]
+        fn $name<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            serializer.serialize_str(os.as_deref().unwrap_or($default))
+        }
+    };
 }
 
-#[allow(clippy::ref_option)]
-fn serialize_xsi_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("http://www.w3.org/2001/XMLSchema-instance")
-    }
-}
-
-#[allow(clippy::ref_option)]
-fn serialize_cenc_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("urn:mpeg:cenc:2013")
-    }
-}
-
-#[allow(clippy::ref_option)]
-fn serialize_mspr_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("urn:microsoft:playready")
-    }
-}
-
-#[allow(clippy::ref_option)]
-fn serialize_xlink_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("http://www.w3.org/1999/xlink")
-    }
-}
-
-#[allow(clippy::ref_option)]
-fn serialize_dvb_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("urn:dvb:dash-extensions:2014-1")
-    }
-}
-
-#[allow(clippy::ref_option)]
-fn serialize_dashif_ns<S>(os: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if let Some(s) = os {
-        serializer.serialize_str(s)
-    } else {
-        serializer.serialize_str("https://dashif.org/guidelines/clearKey")
-    }
-}
+serialize_ns_with_default!(serialize_xmlns, "urn:mpeg:dash:schema:mpd:2011");
+serialize_ns_with_default!(serialize_xsi_ns, "http://www.w3.org/2001/XMLSchema-instance");
+serialize_ns_with_default!(serialize_cenc_ns, "urn:mpeg:cenc:2013");
+serialize_ns_with_default!(serialize_mspr_ns, "urn:microsoft:playready");
+serialize_ns_with_default!(serialize_xlink_ns, "http://www.w3.org/1999/xlink");
+serialize_ns_with_default!(serialize_dvb_ns, "urn:dvb:dash-extensions:2014-1");
+serialize_ns_with_default!(serialize_dashif_ns, "https://dashif.org/guidelines/clearKey");
 
 // These default_* functions are needed to provide defaults for serde deserialization of certain
 // elements, where the Default function for that type doesn't return a value compatible with the
@@ -2183,7 +2113,7 @@ pub struct MPD {
 
 impl std::fmt::Display for MPD {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", quick_xml::se::to_string(self).map_err(|_| std::fmt::Error)?)
+        f.write_str(&quick_xml::se::to_string(self).map_err(|_| std::fmt::Error)?)
     }
 }
 
@@ -2232,34 +2162,13 @@ fn is_audio_codec(name: &str) -> bool {
 /// child `Representation` nodes has an audio `contentType` or `mimeType` attribute.
 #[must_use]
 pub fn is_audio_adaptation(a: &&AdaptationSet) -> bool {
-    if let Some(codec) = &a.codecs {
-        if is_audio_codec(codec) {
-            return true;
-        }
-    }
-    if let Some(ct) = &a.contentType {
-        if ct == "audio" {
-            return true;
-        }
-    }
-    if let Some(mimetype) = &a.mimeType {
-        if mimetype.starts_with("audio/") {
-            return true;
-        }
-    }
-    for r in &a.representations {
-        if let Some(ct) = &r.contentType {
-            if ct == "audio" {
-                return true;
-            }
-        }
-        if let Some(mimetype) = &r.mimeType {
-            if mimetype.starts_with("audio/") {
-                return true;
-            }
-        }
-    }
-    false
+    a.codecs.as_deref().is_some_and(is_audio_codec)
+        || a.contentType.as_deref().is_some_and(|a| a == "audio")
+        || a.mimeType.as_deref().is_some_and(|mt| mt.starts_with("audio/"))
+        || a.representations.iter().any(|r| {
+            r.contentType.as_deref().is_some_and(|a| a == "audio")
+                || r.mimeType.as_deref().is_some_and(|mt| mt.starts_with("audio/"))
+        })
 }
 
 /// Returns `true` if this AdaptationSet contains video content.
@@ -2274,31 +2183,22 @@ pub fn is_video_adaptation(a: &&AdaptationSet) -> bool {
     if is_audio_adaptation(a) {
         return false;
     }
-    if let Some(ct) = &a.contentType {
-        if ct == "video" {
-            return true;
-        }
-    }
-    if let Some(mimetype) = &a.mimeType {
-        if mimetype.starts_with("video/") {
-            return true;
-        }
+    if a.contentType.as_deref().is_some_and(|v| v == "video")
+        || a.mimeType.as_deref().is_some_and(|mt| mt.starts_with("video/"))
+    {
+        return true;
     }
     for r in &a.representations {
-        if let Some(ct) = &r.contentType {
-            if ct == "video" {
-                return true;
-            }
+        if r.contentType.as_deref().is_some_and(|v| v == "video") {
+            return true;
         }
         // We can have a Representation with mimeType="video/mp4" and codecs="wvtt", which means
         // WebVTT in a (possibly fragmented) MP4 container.
         if r.codecs.as_deref().is_some_and(is_subtitle_codec) {
             return false;
         }
-        if let Some(mimetype) = &r.mimeType {
-            if mimetype.starts_with("video/") {
-                return true;
-            }
+        if r.mimeType.as_deref().is_some_and(|mt| mt.starts_with("video/")) {
+            return true;
         }
     }
     false
@@ -2306,20 +2206,13 @@ pub fn is_video_adaptation(a: &&AdaptationSet) -> bool {
 
 
 fn is_subtitle_mimetype(mt: &str) -> bool {
-    mt.eq("text/vtt") ||
-    mt.eq("application/ttml+xml") ||
-    mt.eq("application/x-sami")
-
     // Some manifests use a @mimeType of "application/mp4" together with @contentType="text"; we'll
     // classify these only based on their contentType.
+    matches!(mt, "text/vtt" | "application/ttml+xml" | "application/x-sami")
 }
 
 fn is_subtitle_codec(c: &str) -> bool {
-    c == "wvtt" ||
-    c == "c608" ||
-    c == "stpp" ||
-    c == "tx3g" ||
-    c.starts_with("stpp.")
+    matches!(c, "wvtt" | "c608" | "stpp" | "tx3g") || c.starts_with("stpp.")
 }
 
 /// Returns `true` if this AdaptationSet contains subtitle content.
@@ -2334,35 +2227,18 @@ fn is_subtitle_codec(c: &str) -> bool {
 /// AdaptationSet with Accessibility node having @SchemeIdUri =
 /// "urn:tva:metadata:cs:AudioPurposeCS:2007" and @value=2.
 pub fn is_subtitle_adaptation(a: &&AdaptationSet) -> bool {
-    if a.mimeType.as_deref().is_some_and(is_subtitle_mimetype) {
-        return true;
-    }
-    if a.contentType.as_deref().is_some_and(|ct| ct.eq("text")) {
-        return true;
-    }
-    if a.codecs.as_deref().is_some_and(is_subtitle_codec) {
-        return true;
-    }
-    for cc in &a.ContentComponent {
-        if cc.contentType.as_deref().is_some_and(|ct| ct.eq("text")) {
-            return true;
-        }
-    }
-    for r in &a.Role {
-        if r.value.as_deref().is_some_and(|rr| rr.eq("subtitle")) {
-            return true;
-        }
-    }
-    for r in &a.representations {
-        if r.mimeType.as_deref().is_some_and(is_subtitle_mimetype) {
-            return true;
-        }
+    a.mimeType.as_deref().is_some_and(is_subtitle_mimetype)
+        || a.contentType.as_deref().is_some_and(|t| t == "text")
+        || a.codecs.as_deref().is_some_and(is_subtitle_codec)
+        || a.ContentComponent
+            .iter()
+            .any(|cc| cc.contentType.as_deref().is_some_and(|t| t == "text"))
+        || a.Role.iter().any(|r| r.value.as_deref().is_some_and(|t| t == "subtitle"))
         // Often, but not always, the subtitle codec is also accompanied by a contentType of "text".
-        if r.codecs.as_deref().is_some_and(is_subtitle_codec) {
-            return true;
-        }
-    }
-    false
+        || a.representations.iter().any(|r| {
+            r.mimeType.as_deref().is_some_and(is_subtitle_mimetype)
+                || r.codecs.as_deref().is_some_and(is_subtitle_codec)
+        })
 }
 
 
@@ -2399,171 +2275,116 @@ fn subtitle_type_for_mimetype(mt: &str) -> Option<SubtitleType> {
         "text/vtt" => Some(SubtitleType::Vtt),
         "application/ttml+xml" => Some(SubtitleType::Ttml),
         "application/x-sami" => Some(SubtitleType::Sami),
-        _ => None
+        _ => None,
+    }
+}
+
+fn subtitle_type_for_codecs(codecs: &str) -> Option<SubtitleType> {
+    match codecs {
+        // can be extracted with https://github.com/xhlove/dash-subtitle-extractor
+        "wvtt" => Some(SubtitleType::Wvtt),
+        "c608" => Some(SubtitleType::Eia608),
+        "tx3g" => Some(SubtitleType::Ttxt),
+        "stpp" => Some(SubtitleType::Stpp),
+        c if c.starts_with("stpp.") => Some(SubtitleType::Stpp),
+        _ => None,
     }
 }
 
 #[must_use]
 pub fn subtitle_type(a: &&AdaptationSet) -> SubtitleType {
-    if let Some(mimetype) = &a.mimeType {
-        if let Some(st) = subtitle_type_for_mimetype(mimetype) {
-            return st;
-        }
-    }
-    if let Some(codecs) = &a.codecs {
-        if codecs == "wvtt" {
-            // can be extracted with https://github.com/xhlove/dash-subtitle-extractor
-            return SubtitleType::Wvtt;
-        }
-        if codecs == "c608" {
-            return SubtitleType::Eia608;
-        }
-        if codecs == "tx3g" {
-            return SubtitleType::Ttxt;
-        }
-        if codecs == "stpp" {
-            return SubtitleType::Stpp;
-        }
-        if codecs.starts_with("stpp.") {
-            return SubtitleType::Stpp;
-        }
-    }
-    for r in &a.representations {
-        if let Some(mimetype) = &r.mimeType {
-            if let Some(st) = subtitle_type_for_mimetype(mimetype) {
-                return st;
-            }
-        }
-        if let Some(codecs) = &r.codecs {
-            if codecs == "wvtt" {
-                return SubtitleType::Wvtt;
-            }
-            if codecs == "c608" {
-                return SubtitleType::Eia608;
-            }
-            if codecs == "tx3g" {
-                return SubtitleType::Ttxt;
-            }
-            if codecs == "stpp" {
-                return SubtitleType::Stpp;
-            }
-            if codecs.starts_with("stpp.") {
-                return SubtitleType::Stpp;
-            }
-        }
-    }
-    SubtitleType::Unknown
+    a.mimeType
+        .as_deref()
+        .and_then(subtitle_type_for_mimetype)
+        .or_else(|| a.codecs.as_deref().and_then(subtitle_type_for_codecs))
+        .or_else(|| {
+            a.representations.iter().find_map(|r| {
+                r.mimeType
+                    .as_deref()
+                    .and_then(subtitle_type_for_mimetype)
+                    .or_else(|| r.codecs.as_deref().and_then(subtitle_type_for_codecs))
+            })
+        })
+        .unwrap_or(SubtitleType::Unknown)
 }
 
 
-#[allow(dead_code)]
 pub fn content_protection_type(cp: &ContentProtection) -> String {
-    if let Some(v) = &cp.value {
-        if v.eq("cenc") {
-            return String::from("cenc");
-        }
-        if v.eq("Widevine") {
-            return String::from("Widevine");
-        }
-        if v.eq("MSPR 2.0") {
-            return String::from("PlayReady");
-        }
-    }
-    // See list at https://dashif.org/identifiers/content_protection/
-    let uri = &cp.schemeIdUri;
-    let uri = uri.to_lowercase();
-    if uri.eq("urn:mpeg:dash:mp4protection:2011") {
-        return String::from("cenc");
-    }
-    if uri.eq("urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed") {
-        return String::from("Widevine");
-    }
-    if uri.eq("urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95") {
-        return String::from("PlayReady");
-    }
-    if uri.eq("urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2") {
-        return String::from("FairPlay");
-    }
-    if uri.eq("urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47") {
-        return String::from("Clear Key AES-128");
-    }
-    if uri.eq("urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957") {
-        return String::from("Clear Key SAMPLE-AES");
-    }
-    if uri.eq("urn:uuid:adb41c24-2dbf-4a6d-958b-4457c0d27b95") {
-        return String::from("Nagra");
-    }
-    if uri.eq("urn:uuid:5e629af5-38da-4063-8977-97ffbd9902d4") {
-        return String::from("Marlin");
-    }
-    if uri.eq("urn:uuid:f239e769-efa3-4850-9c16-a903c6932efb") {
-        return String::from("Adobe PrimeTime");
-    }
-    if uri.eq("urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b") {
-        return String::from("W3C Common PSSH box");
-    }
-    if uri.eq("urn:uuid:80a6be7e-1448-4c37-9e70-d5aebe04c8d2") {
-        return String::from("Irdeto Content Protection");
-    }
-    if uri.eq("urn:uuid:3d5e6d35-9b9a-41e8-b843-dd3c6e72c42c") {
-        return String::from("WisePlay-ChinaDRM");
-    }
-    if uri.eq("urn:uuid:616c7469-6361-7374-2d50-726f74656374") {
-        return String::from("Alticast");
-    }
-    if uri.eq("urn:uuid:6dd8b3c3-45f4-4a68-bf3a-64168d01a4a6") {
-        return String::from("ABV DRM");
-    }
-    // Segment encryption
-    if uri.eq("urn:mpeg:dash:sea:2012") {
-        return String::from("SEA");
-    }
-    String::from("<unknown>")
+    let protection = match cp.value.as_deref() {
+        Some("cenc") => "cenc",
+        Some("Widevine") => "Widevine",
+        Some("MSPR 2.0") => "PlayReady",
+        // See list at https://dashif.org/identifiers/content_protection/
+        _ => match cp.schemeIdUri.to_lowercase().as_str() {
+            "urn:mpeg:dash:mp4protection:2011" => "cenc",
+            "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" => "Widevine",
+            "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95" => "PlayReady",
+            "urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2" => "FairPlay",
+            "urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47" => "Clear Key AES-128",
+            "urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957" => "Clear Key SAMPLE-AES",
+            "urn:uuid:adb41c24-2dbf-4a6d-958b-4457c0d27b95" => "Nagra",
+            "urn:uuid:5e629af5-38da-4063-8977-97ffbd9902d4" => "Marlin",
+            "urn:uuid:f239e769-efa3-4850-9c16-a903c6932efb" => "Adobe PrimeTime",
+            "urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b" => "W3C Common PSSH box",
+            "urn:uuid:80a6be7e-1448-4c37-9e70-d5aebe04c8d2" => "Irdeto Content Protection",
+            "urn:uuid:3d5e6d35-9b9a-41e8-b843-dd3c6e72c42c" => "WisePlay-ChinaDRM",
+            "urn:uuid:616c7469-6361-7374-2d50-726f74656374" => "Alticast",
+            "urn:uuid:6dd8b3c3-45f4-4a68-bf3a-64168d01a4a6" => "ABV DRM",
+            // Segment encryption
+            "urn:mpeg:dash:sea:2012" => "SEA",
+            _ => "<unknown>",
+        },
+    };
+    protection.to_string()
 }
 
+
+fn check_url(errors: &mut Vec<String>, url: &str) {
+    if !valid_url_p(url) {
+        errors.push(format!("invalid URL {url}"));
+    }
+}
+
+fn check_initialization_url(errors: &mut Vec<String>, url: &str) {
+    check_url(errors, url);
+    if url.contains("$Number") {
+        errors.push(String::from("$Number$ identifier used in initialization segment URL"));
+    }
+    if url.contains("$Time") {
+        errors.push(String::from("$Time$ identifier used in initialization segment URL"));
+    }
+}
 
 fn check_segment_template_duration(
     st: &SegmentTemplate,
     max_seg_duration: &Duration,
-    outer_timescale: u64) -> Vec<String>
-{
-    let mut errors = Vec::new();
+    outer_timescale: u64,
+    errors: &mut Vec<String>,
+) {
     if let Some(timeline) = &st.SegmentTimeline {
+        let timescale = st.timescale.unwrap_or(outer_timescale);
+        let max_secs = max_seg_duration.as_secs();
         for s in &timeline.segments {
-            let sd = s.d / st.timescale.unwrap_or(outer_timescale);
-            if sd > max_seg_duration.as_secs() {
+            if timescale > 0 && s.d / timescale > max_secs {
                 errors.push(String::from("SegmentTimeline has segment@d > @maxSegmentDuration"));
             }
         }
     }
-    errors
 }
 
-fn check_segment_template_conformity(st: &SegmentTemplate) -> Vec<String> {
-    let mut errors = Vec::new();
+fn check_segment_template_conformity(st: &SegmentTemplate, errors: &mut Vec<String>) {
     if let Some(md) = &st.media {
-        if !valid_url_p(md) {
-            errors.push(format!("invalid URL {md}"));
-        }
+        check_url(errors, md);
         if md.contains("$Number$") && md.contains("$Time") {
             errors.push(String::from("both $Number$ and $Time$ are used in media template URL"));
         }
     }
     if let Some(init) = &st.initialization {
-        if !valid_url_p(init) {
-            errors.push(format!("invalid URL {init}"));
-        }
-        if init.contains("$Number") {
-            errors.push(String::from("$Number$ identifier used in initialization segment URL"));
-        }
-        if init.contains("$Time") {
-            errors.push(String::from("$Time$ identifier used in initialization segment URL"));
-        }
+        check_initialization_url(errors, init);
     }
     if st.duration.is_some() && st.SegmentTimeline.is_some() {
         errors.push(String::from("both SegmentTemplate.duration and SegmentTemplate.SegmentTimeline present"));
     }
-    errors
 }
 
 
@@ -2573,13 +2394,7 @@ fn valid_url_p(u: &str) -> bool {
     use url::ParseError;
 
     match Url::parse(u) {
-        Ok(url) => {
-            url.scheme() == "https" ||
-                url.scheme() == "http" ||
-                url.scheme() == "ftp" ||
-                url.scheme() == "file" ||
-                url.scheme() == "data"
-        },
+        Ok(url) => matches!(url.scheme(), "http" | "https" |  "ftp" | "file" | "data"),
         Err(ParseError::RelativeUrlWithoutBase) => true,
         Err(_) => false,
     }
@@ -2590,55 +2405,59 @@ fn valid_url_p(u: &str) -> bool {
 pub fn check_conformity(mpd: &MPD) -> Vec<String> {
     let mut errors = Vec::new();
 
-    // @maxHeight on the AdaptationSet should give the maximum value of the @height values of its
-    // Representation elements.
     for p in &mpd.periods {
         if p.adaptations.is_empty() {
-            errors.push(format!("Period with @id {} contains no AdaptationSet elements",
-                                p.id.clone().unwrap_or(String::from("<unspecified>"))));
+            errors.push(format!(
+                "Period with @id {} contains no AdaptationSet elements",
+                p.id.as_deref().unwrap_or("<unspecified>")
+            ));
         }
         for a in &p.adaptations {
+            // @maxHeight on the AdaptationSet should give the maximum value of the @height values
+            // of its Representation elements.
             if let Some(mh) = a.maxHeight {
-                if let Some(mr) = a.representations.iter().max_by_key(|r| r.height.unwrap_or(0)) {
-                    if mr.height.unwrap_or(0) > mh {
-                        errors.push(String::from("invalid @maxHeight on AdaptationSet"));
-                    }
+                if a.representations
+                    .iter()
+                    .filter_map(|r| r.height)
+                    .max()
+                    .is_some_and(|height| height > mh)
+                {
+                    errors.push(String::from("invalid @maxHeight on AdaptationSet"));
                 }
             }
-        }
-    }
-    // @maxWidth on the AdaptationSet should give the maximum value of the @width values of its
-    // Representation elements.
-    for p in &mpd.periods {
-        for a in &p.adaptations {
+            // @maxWidth on the AdaptationSet should give the maximum value of the @width values of
+            // its Representation elements.
             if let Some(mw) = a.maxWidth {
-                if let Some(mr) = a.representations.iter().max_by_key(|r| r.width.unwrap_or(0)) {
-                    if mr.width.unwrap_or(0) > mw {
-                        errors.push(String::from("invalid @maxWidth on AdaptationSet"));
-                    }
+                if a.representations
+                    .iter()
+                    .filter_map(|r| r.width)
+                    .max()
+                    .is_some_and(|width| width > mw)
+                {
+                    errors.push(String::from("invalid @maxWidth on AdaptationSet"));
                 }
             }
-        }
-    }
-    // @maxBandwidth on the AdaptationSet should give the maximum value of the @bandwidth values of its
-    // Representation elements.
-    for p in &mpd.periods {
-        for a in &p.adaptations {
+            // @maxBandwidth on the AdaptationSet should give the maximum value of the @bandwidth
+            // values of its Representation elements.
             if let Some(mb) = a.maxBandwidth {
-                if let Some(mr) = a.representations.iter().max_by_key(|r| r.bandwidth.unwrap_or(0)) {
-                    if mr.bandwidth.unwrap_or(0) > mb {
-                        errors.push(String::from("invalid @maxBandwidth on AdaptationSet"));
-                    }
+                if a.representations
+                    .iter()
+                    .filter_map(|r| r.bandwidth)
+                    .max()
+                    .is_some_and(|bandwidth| bandwidth > mb)
+                {
+                    errors.push(String::from("invalid @maxBandwidth on AdaptationSet"));
                 }
             }
         }
     }
+
     // No @d of a segment should be greater than @maxSegmentDuration.
     if let Some(max_seg_duration) = mpd.maxSegmentDuration {
         for p in &mpd.periods {
             for a in &p.adaptations {
-                // We need to keep track of outer_timescale for situations with a nested SegmentTemplate.
-                // For an example see test/fixtures/aws.xml.
+                // We need to keep track of outer_timescale for situations with a nested
+                // SegmentTemplate. For an example see test/fixtures/aws.xml.
                 // <SegmentTemplate startNumber="1" timescale="90000"/>
                 //   <Representation bandwidth="3296000" ...>
                 //     <SegmentTemplate initialization="i.mp4" media="m$Number$.mp4">
@@ -2649,18 +2468,24 @@ pub fn check_conformity(mpd: &MPD) -> Vec<String> {
                 // ...
                 let mut outer_timescale = 1;
                 if let Some(st) = &a.SegmentTemplate {
-                    check_segment_template_duration(st, &max_seg_duration, outer_timescale)
-                        .into_iter()
-                        .for_each(|msg| errors.push(msg));
+                    check_segment_template_duration(
+                        st,
+                        &max_seg_duration,
+                        outer_timescale,
+                        &mut errors,
+                    );
                     if let Some(ots) = st.timescale {
                         outer_timescale = ots;
                     }
                 }
                 for r in &a.representations {
                     if let Some(st) = &r.SegmentTemplate {
-                        check_segment_template_duration(st, &max_seg_duration, outer_timescale)
-                            .into_iter()
-                            .for_each(|msg| errors.push(msg));
+                        check_segment_template_duration(
+                            st,
+                            &max_seg_duration,
+                            outer_timescale,
+                            &mut errors,
+                        );
                     }
                 }
             }
@@ -2668,100 +2493,68 @@ pub fn check_conformity(mpd: &MPD) -> Vec<String> {
     }
 
     for bu in &mpd.base_url {
-        if !valid_url_p(&bu.base) {
-            errors.push(format!("invalid URL {}", bu.base));
-        }
+        check_url(&mut errors, &bu.base);
     }
     for p in &mpd.periods {
         for bu in &p.BaseURL {
-            if !valid_url_p(&bu.base) {
-                errors.push(format!("invalid URL {}", bu.base));
-            }
+            check_url(&mut errors, &bu.base);
         }
         for a in &p.adaptations {
             for bu in &a.BaseURL {
-                if !valid_url_p(&bu.base) {
-                    errors.push(format!("invalid URL {}", bu.base));
-                }
+                check_url(&mut errors, &bu.base);
             }
             if let Some(st) = &a.SegmentTemplate {
-                check_segment_template_conformity(st)
-                    .into_iter()
-                    .for_each(|msg| errors.push(msg));
+                check_segment_template_conformity(st, &mut errors);
             }
             for r in &a.representations {
                 for bu in &r.BaseURL {
-                    if !valid_url_p(&bu.base) {
-                        errors.push(format!("invalid URL {}", bu.base));
-                    }
+                    check_url(&mut errors, &bu.base);
                 }
                 if let Some(sb) = &r.SegmentBase {
-                    if let Some(init) = &sb.Initialization {
-                        if let Some(su) = &init.sourceURL {
-                            if !valid_url_p(su) {
-                                errors.push(format!("invalid URL {su}"));
-                            }
-                            if su.contains("$Number") {
-                                errors.push(String::from("$Number$ identifier used in initialization segment URL"));
-                            }
-                            if su.contains("$Time") {
-                                errors.push(String::from("$Time$ identifier used in initialization segment URL"));
-                            }
-                        }
+                    if let Some(su) = sb
+                        .Initialization
+                        .as_ref()
+                        .and_then(|init| init.sourceURL.as_deref())
+                    {
+                        check_initialization_url(&mut errors, su);
                     }
-                    if let Some(ri) = &sb.representation_index {
-                        if let Some(su) = &ri.sourceURL {
-                            if !valid_url_p(su) {
-                                errors.push(format!("invalid URL {su}"));
-                            }
-                        }
+                    if let Some(su) = sb
+                        .representation_index
+                        .as_ref()
+                        .and_then(|ri| ri.sourceURL.as_deref())
+                    {
+                        check_url(&mut errors, su);
                     }
                 }
                 if let Some(sl) = &r.SegmentList {
                     if let Some(hr) = &sl.href {
-                        if !valid_url_p(hr) {
-                            errors.push(format!("invalid URL {hr}"));
-                        }
+                        check_url(&mut errors, hr);
                     }
-                    if let Some(init) = &sl.Initialization {
-                        if let Some(su) = &init.sourceURL {
-                            if !valid_url_p(su) {
-                                errors.push(format!("invalid URL {su}"));
-                            }
-                            if su.contains("$Number") {
-                                errors.push(String::from("$Number$ identifier used in initialization segment URL"));
-                            }
-                            if su.contains("$Time") {
-                                errors.push(String::from("$Time$ identifier used in initialization segment URL"));
-                            }
-                        }
+                    if let Some(su) = sl
+                        .Initialization
+                        .as_ref()
+                        .and_then(|init| init.sourceURL.as_deref())
+                    {
+                        check_initialization_url(&mut errors, su);
                     }
                     for su in &sl.segment_urls {
                         if let Some(md) = &su.media {
-                            if !valid_url_p(md) {
-                                errors.push(format!("invalid URL {md}"));
-                            }
+                            check_url(&mut errors, md);
                         }
                         if let Some(ix) = &su.index {
-                            if !valid_url_p(ix) {
-                                errors.push(format!("invalid URL {ix}"));
-                            }
+                            check_url(&mut errors, ix);
                         }
                     }
                 }
                 if let Some(st) = &r.SegmentTemplate {
-                    check_segment_template_conformity(st)
-                        .into_iter()
-                        .for_each(|msg| errors.push(msg));
+                    check_segment_template_conformity(st, &mut errors);
                 }
             }
         }
     }
     for pi in &mpd.ProgramInformation {
         if let Some(u) = &pi.moreInformationURL {
-            if !valid_url_p(u) {
-                errors.push(format!("invalid URL {u}"));
-            }
+            check_url(&mut errors, u);
         }
     }
     errors
@@ -2834,6 +2627,8 @@ mod tests {
         assert_eq!(parse_xs_duration("P0Y0M0DT0H4M20.880S").ok(), Some(Duration::new(260, 880_000_000)));
         assert_eq!(parse_xs_duration("P1Y2M3DT4H5M6.7S").ok(), Some(Duration::new(36993906, 700_000_000)));
         assert_eq!(parse_xs_duration("P1Y2M3DT4H5M6,7S").ok(), Some(Duration::new(36993906, 700_000_000)));
+        // Values that overflow a std::time::Duration must be rejected, not panic.
+        assert!(parse_xs_duration("P18446744073709551615Y").is_err());
 
         // we are not currently handling fractional parts except in the seconds
         // assert_eq!(parse_xs_duration("PT0.5H1S").ok(), Some(Duration::new(30*60+1, 0)));
